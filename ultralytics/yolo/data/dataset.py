@@ -139,6 +139,14 @@ class YOLODataset(BaseDataset):
             assert cache['version'] == self.cache_version  # matches current version
             assert cache['hash'] == get_hash(self.label_files + self.im_files)  # identical hash
         except (FileNotFoundError, AssertionError, AttributeError):
+            """
+            调用逻辑：
+                - 首次运行时： 缓存文件不存在 → FileNotFoundError
+                - 版本不匹配时：缓存版本与当前版本不符 → AssertionError
+                - 文件内容变化时：文件哈希值不匹配 → AssertionError
+                - 缓存文件损坏时：无法正常加载缓存 → AttributeError
+            以上任一情况均会触发异常处理，重新生成缓存文件。
+            """
             cache, exists = self.cache_labels(cache_path), False  # run cache ops
 
         # Display cache

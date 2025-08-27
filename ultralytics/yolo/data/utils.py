@@ -153,21 +153,61 @@ def verify_image_label_seg_pose(args):
                 if f.read() != b'\xff\xd9':  # corrupt JPEG
                     ImageOps.exif_transpose(Image.open(im_file)).save(im_file, 'JPEG', subsampling=0, quality=100)
                     msg = f'{prefix}WARNING ⚠️ {im_file}: corrupt JPEG restored and saved'        
+        
         # Verify labels
         if os.path.isfile(lb_file):            
             nf = 1  # label found
             with open(lb_file) as f:                
-                lb = [x.split() for x in f.read().strip().splitlines() if len(x)]                
-                segments = [np.array(x[1+4+3*17:], dtype=np.float32).reshape(-1, 2) for x in lb]                    
-                lb = [lbx[:1+4+3*17] for lbx in lb]     
-                lb = np.array(lb, dtype=np.float32)
-        keypoints = lb[:, 5:5+3*17].reshape(-1, nkpt, ndim)
-        lb = lb[:, :5]
+                lb = [x.split() for x in f.read().strip().splitlines() if len(x)] 
+                
+                if lb:
+                    # 改为基于4个关键点的解析逻辑
+                    # 标签格式: class_id x_center y_center width height kpt1_x kpt1_y kpt1_v ... kpt4_x kpt4_y kpt4_v seg_x1 seg_y1 seg_x2 seg_y2 ...
+                    bbox_start = 1  # bbox 开始位置 (跳过 class_id)
+                    bbox_end = bbox_start + 4  # bbox 结束位置 (x_center, y_center, width, height)
+                    kpt_start = bbox_end  # 关键点开始位置
+                    kpt_end = kpt_start + nkpt * ndim  # 关键点结束位置 (4个关键点 * 3维度)
+                    
+                    # 提取分割点 (关键点之后的所有坐标)
+                    segments = [np.array(x[kpt_end:], dtype=np.float32).reshape(-1, 2) for x in lb if len(x) > kpt_end]
+                    
+                    # 提取类别+bbox+关键点部分
+                    lb = [lbx[:kpt_end] for lbx in lb]     
+                    lb = np.array(lb, dtype=np.float32)
+                    
+                    # 验证数据长度
+                    if lb.size > 0:
+                        expected_length = 1 + 4 + nkpt * ndim  # class_id + bbox + keypoints
+                        if lb.shape[1] != expected_length:
+                            nc = 1
+                            msg = f'{prefix}WARNING ⚠️ {im_file}: expected {expected_length} columns, got {lb.shape[1]}'
+                            return [None, None, None, None, None, nm, nf, ne, nc, msg]
+                        
+                        # 提取关键点并reshape
+                        keypoints = lb[:, kpt_start:kpt_end].reshape(-1, nkpt, ndim)
+                        
+                        # 只保留类别和bbox
+                        lb = lb[:, :bbox_end]
+                else:
+                    # 空标签文件处理
+                    ne = 1
+                    lb = np.zeros((0, 5), dtype=np.float32)
+                    segments = []
+                    keypoints = None
+        else:
+            # 标签文件不存在
+            nm = 1
+            lb = np.zeros((0, 5), dtype=np.float32)
+            segments = []
+            keypoints = None
+            
         return im_file, lb, shape, segments, keypoints, nm, nf, ne, nc, msg
+        
     except Exception as e:
         nc = 1
         msg = f'{prefix}WARNING ⚠️ {im_file}: ignoring corrupt image/label: {e}'
         return [None, None, None, None, None, nm, nf, ne, nc, msg]
+
 
 def polygon2mask(imgsz, polygons, color=1, downsample_ratio=1):
     """
